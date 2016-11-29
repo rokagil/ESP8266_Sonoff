@@ -29,14 +29,17 @@ const uint8_t     LED_PIN    = 13;
 
 
 
-#define STRUCT_CHAR_ARRAY_SIZE 30 // size of the arrays for MQTT username, password, etc.
+#define STRUCT_CHAR_ARRAY_SIZE 32 // size of the arrays for MQTT username, password, etc.
 
 // MQTT
 char              MQTT_CLIENT_ID[11]                                 = {0};
 char              MQTT_SWITCH_STATE_TOPIC[STRUCT_CHAR_ARRAY_SIZE]   = {0};
 char              MQTT_SWITCH_COMMAND_TOPIC[STRUCT_CHAR_ARRAY_SIZE] = {0};
+char              MQTT_SWITCH_WILL_BIRTH_TOPIC[STRUCT_CHAR_ARRAY_SIZE] = {0};
 const char*       MQTT_SWITCH_ON_PAYLOAD                            = "ON";
 const char*       MQTT_SWITCH_OFF_PAYLOAD                           = "OFF";
+const char*       MQTT_BIRTH_PAYLOAD                                = "Connected";
+const char*       MQTT_WILL_PAYLOAD                                 = "Disconnected";
 
 // Settings for MQTT
 typedef struct {
@@ -115,22 +118,35 @@ void publishSwitchState() {
 
 /*
   Function called to connect/reconnect to the MQTT broker
- */
+*/
 void reconnect() {
-  uint8_t i = 0;
+  //uint8_t i = 0;
   while (!mqttClient.connected()) {
-    if (mqttClient.connect(MQTT_CLIENT_ID)) {
+    if (mqttClient.connect(MQTT_CLIENT_ID, MQTT_SWITCH_WILL_BIRTH_TOPIC, MQTTQOS1, true, MQTT_WILL_PAYLOAD)) {
       DEBUG_PRINTLN(F("INFO: The client is successfully connected to the MQTT broker"));
     } else {
       DEBUG_PRINTLN(F("ERROR: The connection to the MQTT broker failed"));
       DEBUG_PRINT(F("Broker: "));
       DEBUG_PRINTLN(settings.mqttServer);
-      delay(1000);
-      if (i == 3) {
-        reset();
-      }
-      i++;
+      /*
+            delay(1000);
+            if (i == 3) {
+              reset();
+            }
+            i++;
+      */
+      // Wait 5 seconds before retrying
+      delay(5000);
     }
+  }
+
+  if (mqttClient.publish(MQTT_SWITCH_WILL_BIRTH_TOPIC, MQTT_BIRTH_PAYLOAD, true)) {
+    DEBUG_PRINT(F("INFO: MQTT birth message publish succeeded. Topic: "));
+    DEBUG_PRINT(MQTT_SWITCH_WILL_BIRTH_TOPIC);
+    DEBUG_PRINT(F(". Payload: "));
+    DEBUG_PRINTLN("Connected");
+  } else {
+    DEBUG_PRINTLN(F("ERROR: MQTT birth message publish failed, either connection lost, or message too large"));
   }
 
   if (mqttClient.subscribe(MQTT_SWITCH_COMMAND_TOPIC)) {
@@ -147,7 +163,7 @@ void reconnect() {
 ///////////////////////////////////////////////////////////////////////////
 /*
   Function called to toggle the state of the LED
- */
+*/
 void tick() {
   digitalWrite(LED_PIN, !digitalRead(LED_PIN));
 }
@@ -224,22 +240,26 @@ void setup() {
   ticker.attach(0.6, tick);
 
   // get the Chip ID of the switch and use it as the MQTT client ID
-  //sprintf(MQTT_CLIENT_ID, "%06X", ESP.getChipId());
-  sprintf(MQTT_CLIENT_ID, "%s", WiFi.hostname().c_str());
+  sprintf(MQTT_CLIENT_ID, "ESP_%06X", ESP.getChipId());
+  //sprintf(MQTT_CLIENT_ID, "%s", WiFi.hostname().c_str());
   DEBUG_PRINT(F("INFO: MQTT client ID/Hostname: "));
   DEBUG_PRINTLN(MQTT_CLIENT_ID);
 
   // set the state topic: <Chip ID>/switch/state
-  //sprintf(MQTT_SWITCH_STATE_TOPIC, "%06X/switch/state", ESP.getChipId());
-  sprintf(MQTT_SWITCH_STATE_TOPIC, "%s/switch/state", WiFi.hostname().c_str());
+  sprintf(MQTT_SWITCH_STATE_TOPIC, "ESP_%06X/switch/state", ESP.getChipId());
+  //sprintf(MQTT_SWITCH_STATE_TOPIC, "%s/switch/state", WiFi.hostname().c_str());
   DEBUG_PRINT(F("INFO: MQTT state topic: "));
   DEBUG_PRINTLN(MQTT_SWITCH_STATE_TOPIC);
 
   // set the command topic: <Chip ID>/switch/switch
-  //sprintf(MQTT_SWITCH_COMMAND_TOPIC, "%06X/switch/switch", ESP.getChipId());
-  sprintf(MQTT_SWITCH_COMMAND_TOPIC, "%s/switch/switch", WiFi.hostname().c_str());
+  sprintf(MQTT_SWITCH_COMMAND_TOPIC, "ESP_%06X/switch/switch", ESP.getChipId());
+  //sprintf(MQTT_SWITCH_COMMAND_TOPIC, "%s/switch/switch", WiFi.hostname().c_str());
   DEBUG_PRINT(F("INFO: MQTT command topic: "));
   DEBUG_PRINTLN(MQTT_SWITCH_COMMAND_TOPIC);
+
+  // set the will/birth topic
+  sprintf(MQTT_SWITCH_WILL_BIRTH_TOPIC, "ESP_%06X/connection/status", ESP.getChipId());
+  //sprintf(MQTT_SWITCH_WILL_BIRTH_TOPIC, "%s/connection/status", WiFi.hostname().c_str());
 
   // load custom params
   EEPROM.begin(512);
@@ -282,7 +302,7 @@ void setup() {
 
   // connect to the MQTT broker
   reconnect();
-  
+
   ticker.detach();
 
   setRelayState();
@@ -318,7 +338,7 @@ void loop() {
   }
 
   yield();
-  
+
   // keep the MQTT client connected to the broker
   if (!mqttClient.connected()) {
     reconnect();
